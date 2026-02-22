@@ -32,9 +32,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'export_date': DateTime.now().toIso8601String(),
         'version': '1.0',
         'customers': customers.map((customer) {
+          DateTime updatedAt;
+
+          try {
+            updatedAt = customer.transactions
+                .map((t) => t.date)
+                .reduce((a, b) => a.isAfter(b) ? a : b);
+          } catch (e) {
+            // ✅ If no transactions or any issue
+            updatedAt = customer.createdAt;
+          }
+
           return {
             'name': customer.name,
             'created_at': customer.createdAt.toIso8601String(),
+            'updated_at': updatedAt.toIso8601String(),
             'transactions': customer.transactions.map((transaction) {
               return {
                 'amount': transaction.amount,
@@ -192,6 +204,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final customer = Customer(
           name: customerData['name'],
           createdAt: DateTime.parse(customerData['created_at']),
+          updatedAt: DateTime.parse(customerData['updated_at']),
         );
 
         final customerId = await DatabaseHelper.instance.createCustomer(

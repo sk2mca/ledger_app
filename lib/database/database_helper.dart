@@ -19,7 +19,12 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2, // ✅ upgraded
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade,
+    );
   }
 
   Future _createDB(Database db, int version) async {
@@ -32,7 +37,8 @@ class DatabaseHelper {
       CREATE TABLE customers (
         id $idType,
         name $textType,
-        created_at $textType
+        created_at $textType,
+        updated_at $textType
       )
     ''');
 
@@ -50,7 +56,15 @@ class DatabaseHelper {
     ''');
   }
 
-  // Customer CRUD operations
+  // ✅ Migration for existing users
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute("ALTER TABLE customers ADD COLUMN updated_at TEXT");
+    }
+  }
+
+  // ================= CUSTOMER CRUD =================
+
   Future<int> createCustomer(Customer customer) async {
     final db = await instance.database;
     return await db.insert('customers', customer.toMap());
@@ -70,7 +84,10 @@ class DatabaseHelper {
 
   Future<List<Customer>> getAllCustomers() async {
     final db = await instance.database;
-    final result = await db.query('customers', orderBy: 'name ASC');
+    final result = await db.query(
+      'customers',
+      orderBy: 'updated_at DESC', // ✅ recent first
+    );
 
     List<Customer> customers = [];
     for (var map in result) {
@@ -83,9 +100,10 @@ class DatabaseHelper {
 
   Future<int> updateCustomer(Customer customer) async {
     final db = await instance.database;
+
     return db.update(
       'customers',
-      customer.toMap(),
+      {...customer.toMap(), 'updated_at': DateTime.now().toIso8601String()},
       where: 'id = ?',
       whereArgs: [customer.id],
     );
@@ -96,10 +114,16 @@ class DatabaseHelper {
     return await db.delete('customers', where: 'id = ?', whereArgs: [id]);
   }
 
-  // Transaction CRUD operations
+  // ================= TRANSACTION CRUD =================
+
   Future<int> createTransaction(TransactionModel transaction) async {
     final db = await instance.database;
-    return await db.insert('transactions', transaction.toMap());
+
+    final result = await db.insert('transactions', transaction.toMap());
+
+    await _updateCustomerTimestamp(transaction.customerId);
+
+    return result;
   }
 
   Future<List<TransactionModel>> getTransactionsByCustomer(
@@ -118,18 +142,41 @@ class DatabaseHelper {
 
   Future<int> updateTransaction(TransactionModel transaction) async {
     final db = await instance.database;
-    return db.update(
+
+    final result = await db.update(
       'transactions',
       transaction.toMap(),
       where: 'id = ?',
       whereArgs: [transaction.id],
     );
+
+    await _updateCustomerTimestamp(transaction.customerId);
+
+    return result;
   }
 
   Future<int> deleteTransaction(int id) async {
     final db = await instance.database;
-    return await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
+
+    // Get customer_id before delete
+    final maps = await db.query(
+      'transactions',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (maps.isNotEmpty) {
+      final customerId = maps.first['customer_id'] as int;
+
+      await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
+
+      await _updateCustomerTimestamp(customerId);
+    }
+
+    return 1;
   }
+
+  // ================= TOTAL CALCULATIONS =================
 
   Future<double> getTotalYouWillGive() async {
     final customers = await getAllCustomers();
@@ -152,6 +199,21 @@ class DatabaseHelper {
     }
     return total;
   }
+
+  // ================= PRIVATE HELPER =================
+
+  Future<void> _updateCustomerTimestamp(int customerId) async {
+    final db = await instance.database;
+
+    await db.update(
+      'customers',
+      {'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [customerId],
+    );
+  }
+
+  // ================= CLOSE =================
 
   Future close() async {
     final db = await instance.database;
